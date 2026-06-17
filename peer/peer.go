@@ -574,13 +574,19 @@ func (p *Peer) DownloadFile(filename, saveDir string, maxWorkers int) bool {
 	startTime := time.Now()
 
 	type chunkResult struct {
-		index int
-		ok    bool
+		index    int
+		ok       bool
+		fromPeer string
 	}
 
 	results := make(chan chunkResult, totalChunks)
 	sem := make(chan struct{}, maxWorkers)
 	var wg sync.WaitGroup
+	var printMu sync.Mutex
+	digits := len(strconv.Itoa(totalChunks))
+
+	fmt.Printf("[Download] '%s' — %d chunk(s) distribuídos entre %d peer(s)\n",
+		filename, totalChunks, len(peerEndpoints))
 
 	for chunkIndex := 0; chunkIndex < totalChunks; chunkIndex++ {
 		primary := peerEndpoints[chunkIndex%len(peerEndpoints)]
@@ -596,8 +602,15 @@ func (p *Peer) DownloadFile(filename, saveDir string, maxWorkers int) bool {
 		go func(idx int, candidates []Endpoint) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			ok := p.downloadChunkToFile(filename, idx, candidates, f)
-			results <- chunkResult{index: idx, ok: ok}
+			ok, fromPeer := p.downloadChunkToFile(filename, idx, candidates, f)
+			printMu.Lock()
+			if ok {
+				fmt.Printf("[Download] chunk %*d/%d ← %s\n", digits, idx+1, totalChunks, fromPeer)
+			} else {
+				fmt.Printf("[Download] chunk %*d/%d FALHOU\n", digits, idx+1, totalChunks)
+			}
+			printMu.Unlock()
+			results <- chunkResult{index: idx, ok: ok, fromPeer: fromPeer}
 		}(chunkIndex, candidates)
 	}
 
@@ -609,16 +622,22 @@ func (p *Peer) DownloadFile(filename, saveDir string, maxWorkers int) bool {
 
 	successes := 0
 	var failures []int
+	peerChunks := make(map[string]int)
 	for r := range results {
 		if r.ok {
 			successes++
-			fmt.Printf("[Peer] Chunk %d/%d OK\n", r.index+1, totalChunks)
+			peerChunks[r.fromPeer]++
 		} else {
 			failures = append(failures, r.index)
 		}
 	}
 
 	duration := time.Since(startTime)
+
+	fmt.Printf("[Download] Chunks por peer:\n")
+	for pid, count := range peerChunks {
+		fmt.Printf("           %-21s → %d chunk(s)\n", pid, count)
+	}
 
 	if len(failures) > 0 {
 		sort.Ints(failures)
@@ -636,7 +655,7 @@ func (p *Peer) DownloadFile(filename, saveDir string, maxWorkers int) bool {
 // downloadChunkToFile baixa um chunk e escreve direto no offset correto do
 // arquivo de destino, sem lock — cada chunk ocupa um intervalo de bytes
 // distinto e nenhuma outra goroutine escreve nesse intervalo.
-func (p *Peer) downloadChunkToFile(filename string, chunkIndex int, candidates []Endpoint, f *os.File) bool {
+func (p *Peer) downloadChunkToFile(filename string, chunkIndex int, candidates []Endpoint, f *os.File) (bool, string) {
 	for _, ep := range candidates {
 		data, err := p.downloadOneChunk(filename, chunkIndex, ep.Host, ep.Port)
 		if err != nil {
@@ -647,9 +666,9 @@ func (p *Peer) downloadChunkToFile(filename string, chunkIndex int, candidates [
 		if _, err := f.WriteAt(data, offset); err != nil {
 			continue
 		}
-		return true
+		return true, net.JoinHostPort(ep.Host, strconv.Itoa(ep.Port))
 	}
-	return false
+	return false, ""
 }
 
 // fetchFileInfo tenta obter FILE_INFO de qualquer peer da lista.

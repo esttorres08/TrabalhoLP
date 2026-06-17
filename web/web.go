@@ -14,6 +14,7 @@ import (
 	"trabalholp/peer"
 )
 
+// teste
 // Server expõe um *peer.Peer como um pequeno servidor HTTP.
 type Server struct {
 	peer *peer.Peer

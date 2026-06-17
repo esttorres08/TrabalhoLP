@@ -62,8 +62,18 @@ type Peer struct {
 	trackerMu   sync.Mutex
 	trackerConn net.Conn
 
+	chatMu  sync.Mutex
+	chatLog []ChatMessage
+
 	listener net.Listener
 	running  bool
+}
+
+// ChatMessage representa uma mensagem de chat recebida de outro peer.
+type ChatMessage struct {
+	From string
+	Text string
+	Time time.Time
 }
 
 // New cria um novo Peer.
@@ -184,6 +194,9 @@ func (p *Peer) handlePeerRequest(conn net.Conn) {
 			sender = "?"
 		}
 		text, _ := message["message"].(string)
+		p.chatMu.Lock()
+		p.chatLog = append(p.chatLog, ChatMessage{From: sender, Text: text, Time: time.Now()})
+		p.chatMu.Unlock()
 		fmt.Printf("\n[Chat] %s: %s\n> ", sender, text)
 		protocol.SendMsg(conn, protocol.Message{"status": protocol.StatusOK})
 
@@ -337,6 +350,37 @@ func (p *Peer) unregisterFromTracker() {
 // ------------------------------------------------------------------
 // Operações do usuário (chamadas pela CLI)
 // ------------------------------------------------------------------
+
+// ChatLog retorna uma cópia das mensagens de chat recebidas até agora.
+func (p *Peer) ChatLog() []ChatMessage {
+	p.chatMu.Lock()
+	defer p.chatMu.Unlock()
+	log := make([]ChatMessage, len(p.chatLog))
+	copy(log, p.chatLog)
+	return log
+}
+
+// SharedFiles retorna a lista (ordenada) dos arquivos compartilhados por
+// este peer.
+func (p *Peer) SharedFiles() []string {
+	p.filesMu.Lock()
+	defer p.filesMu.Unlock()
+	files := make([]string, 0, len(p.files))
+	for name := range p.files {
+		files = append(files, name)
+	}
+	sort.Strings(files)
+	return files
+}
+
+// SharedFilePath retorna o caminho absoluto do arquivo compartilhado com o
+// nome informado, e um booleano indicando se ele existe.
+func (p *Peer) SharedFilePath(filename string) (string, bool) {
+	p.filesMu.Lock()
+	defer p.filesMu.Unlock()
+	path, ok := p.files[filename]
+	return path, ok
+}
 
 // ListPeers retorna os peers conectados ao tracker (exceto este).
 func (p *Peer) ListPeers() map[string]RemotePeer {

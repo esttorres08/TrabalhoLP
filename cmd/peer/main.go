@@ -2,7 +2,7 @@
 //
 // Uso típico:
 //
-//	go run ./cmd/peer 6001 [--tracker host:porta] [--share pasta]
+//	go run ./cmd/peer 6001 [--tracker host:porta] [--share pasta] [--web porta]
 //
 // Após iniciado, digite `help` para ver os comandos disponíveis.
 package main
@@ -10,6 +10,8 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -18,6 +20,7 @@ import (
 	"unicode"
 
 	"trabalholp/peer"
+	"trabalholp/web"
 )
 
 const helpText = `
@@ -199,7 +202,7 @@ func parseTracker(value string) (string, int, error) {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Uso: peer <porta> [--host 127.0.0.1] [--tracker host:porta] [--share pasta]")
+		fmt.Fprintln(os.Stderr, "Uso: peer <porta> [--host 127.0.0.1] [--tracker host:porta] [--share pasta] [--web porta]")
 		os.Exit(1)
 	}
 
@@ -213,6 +216,7 @@ func main() {
 	trackerHost := "127.0.0.1"
 	trackerPort := 5000
 	shareDir := ""
+	webPort := ""
 
 	rest := os.Args[2:]
 	for i := 0; i < len(rest); i++ {
@@ -243,6 +247,13 @@ func main() {
 				os.Exit(1)
 			}
 			shareDir = rest[i]
+		case "--web":
+			i++
+			if i >= len(rest) {
+				fmt.Fprintln(os.Stderr, "--web requer uma porta")
+				os.Exit(1)
+			}
+			webPort = rest[i]
 		default:
 			fmt.Fprintf(os.Stderr, "Argumento desconhecido: %s\n", rest[i])
 			os.Exit(1)
@@ -254,6 +265,17 @@ func main() {
 	if !p.Start(trackerHost, trackerPort) {
 		fmt.Println("[CLI] Falha ao iniciar o peer. Verifique se o tracker está rodando.")
 		os.Exit(1)
+	}
+
+	if webPort != "" {
+		webServer := web.New(p)
+		go func() {
+			addr := net.JoinHostPort(host, webPort)
+			fmt.Printf("[Web] Interface disponível em http://%s/\n", addr)
+			if err := http.ListenAndServe(addr, webServer.Handler()); err != nil {
+				fmt.Printf("[Web] Erro ao iniciar interface web: %v\n", err)
+			}
+		}()
 	}
 
 	// Garante que o peer se desregistre do tracker ao receber Ctrl+C.
